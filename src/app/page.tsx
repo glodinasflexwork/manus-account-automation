@@ -26,8 +26,9 @@ export default function Home() {
   const [steps, setSteps] = useState<AutomationStep[]>([
     { id: 'email', name: 'Generate Email Address', status: 'pending' },
     { id: 'phone', name: 'Get Phone Number', status: 'pending' },
+    { id: 'verify_phone', name: 'Verify Phone Number', status: 'pending' },
     { id: 'account', name: 'Create Manus Account', status: 'pending' },
-    { id: 'verify', name: 'Verify Email', status: 'pending' },
+    { id: 'verify_email', name: 'Verify Email', status: 'pending' },
   ]);
   const [accountData, setAccountData] = useState<AccountData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,19 +73,65 @@ export default function Home() {
 
       updateStep('email', 'completed', `Generated: ${emailData.email}`);
 
-      // Step 2: Get phone number (optional for Manus)
+      // Step 2: Get phone number
       updateStep('phone', 'running', 'Fetching TextVerified services...');
       
       const servicesResponse = await fetch('/api/textverified');
       const servicesData = await servicesResponse.json();
       
+      let phoneNumber = null;
+      let verificationId = null;
+      
       if (servicesData.success && servicesData.services.length > 0) {
-        updateStep('phone', 'completed', 'Phone service available');
+        // Create a verification for the first available service
+        const createVerificationResponse = await fetch('/api/textverified', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serviceId: servicesData.services[0].id }),
+        });
+        
+        const verificationData = await createVerificationResponse.json();
+        
+        if (verificationData.success) {
+          phoneNumber = verificationData.verification.number;
+          verificationId = verificationData.verification.id;
+          updateStep('phone', 'completed', `Phone number: ${phoneNumber}`);
+        } else {
+          updateStep('phone', 'completed', 'Skipped (service unavailable)');
+        }
       } else {
-        updateStep('phone', 'completed', 'Skipped (not required for Manus)');
+        updateStep('phone', 'completed', 'Skipped (no services available)');
       }
 
-      // Step 3: Create Manus account
+      // Step 3: Verify phone number (if we have one)
+      if (phoneNumber && verificationId) {
+        updateStep('verify_phone', 'running', 'Waiting for SMS verification...');
+        
+        // Poll for SMS verification code
+        let smsReceived = false;
+        const maxAttempts = 12; // 2 minutes with 10-second intervals
+        
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          
+          const checkResponse = await fetch(`/api/textverified/${verificationId}`);
+          const checkData = await checkResponse.json();
+          
+          if (checkData.success && checkData.verification.code) {
+            updateStep('verify_phone', 'completed', `SMS code received: ${checkData.verification.code}`);
+            smsReceived = true;
+            break;
+          }
+        }
+        
+        if (!smsReceived) {
+          updateStep('verify_phone', 'error', 'SMS verification timeout');
+        }
+      } else {
+        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
+      }
+
+      // Step 4: Create Manus account
       updateStep('account', 'running', 'Creating Manus account...');
       
       const accountResponse = await fetch('/api/manus', {
@@ -102,8 +149,8 @@ export default function Home() {
       setAccountData(accountResult.accountData);
       updateStep('account', 'completed', 'Account created successfully');
 
-      // Step 4: Wait for email verification
-      updateStep('verify', 'running', 'Waiting for verification email...');
+      // Step 5: Wait for email verification
+      updateStep('verify_email', 'running', 'Waiting for verification email...');
       
       const verificationResponse = await fetch(`/api/mailtrap/${firstInbox.id}`, {
         method: 'POST',
@@ -131,12 +178,12 @@ export default function Home() {
         const completeResult = await completeResponse.json();
         
         if (completeResult.success) {
-          updateStep('verify', 'completed', 'Email verified successfully');
+          updateStep('verify_email', 'completed', 'Email verified successfully');
         } else {
-          updateStep('verify', 'error', 'Failed to complete verification');
+          updateStep('verify_email', 'error', 'Failed to complete verification');
         }
       } else {
-        updateStep('verify', 'error', 'No verification link found in email');
+        updateStep('verify_email', 'error', 'No verification link found in email');
       }
 
     } catch (err) {
