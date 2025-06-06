@@ -1,137 +1,124 @@
 import axios from 'axios';
 
-export interface GuerrillaEmailData {
-  email: string;
-  token: string;
-  alias?: string;
-}
-
-export interface GuerrillaMessage {
-  mail_id: string;
-  mail_from: string;
-  mail_subject: string;
-  mail_excerpt: string;
-  mail_timestamp: string;
-  mail_read: string;
-  mail_date: string;
-}
-
 export class GuerrillaMailClient {
   private baseUrl = 'https://api.guerrillamail.com/ajax.php';
-  private token: string | null = null;
-  private email: string | null = null;
+  private sidToken: string | null = null;
+  private emailAddress: string | null = null;
 
   // Get a temporary email address
-  async getEmailAddress(): Promise<GuerrillaEmailData> {
+  async getEmailAddress(): Promise<{ email: string; sidToken: string }> {
     try {
-      const response = await axios.get(`${this.baseUrl}?f=get_email_address`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-
-      if (response.data && response.data.email_addr) {
-        this.email = response.data.email_addr;
-        this.token = response.data.sid_token;
-        
-        return {
-          email: this.email,
-          token: this.token,
-          alias: response.data.alias
-        };
-      } else {
+      const response = await axios.get(`${this.baseUrl}?f=get_email_address`);
+      const data = response.data as Record<string, unknown>;
+      
+      this.sidToken = String(data.sid_token || '');
+      this.emailAddress = String(data.email_addr || '');
+      
+      if (!this.emailAddress) {
         throw new Error('Failed to get email address from Guerrilla Mail');
       }
+
+      return {
+        email: this.emailAddress,
+        sidToken: this.sidToken,
+      };
     } catch (error) {
       console.error('Error getting Guerrilla Mail email:', error);
-      throw new Error('Failed to get temporary email address');
+      throw new Error('Failed to generate temporary email address');
     }
   }
 
   // Get email list
-  async getEmails(): Promise<GuerrillaMessage[]> {
-    if (!this.token) {
-      throw new Error('No token available. Get email address first.');
+  async getEmailList(sidToken?: string): Promise<Record<string, unknown>[]> {
+    const token = sidToken || this.sidToken;
+    if (!token) {
+      throw new Error('No session token available');
     }
 
     try {
-      const response = await axios.get(`${this.baseUrl}?f=get_email_list&sid_token=${this.token}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-
-      return response.data.list || [];
+      const response = await axios.get(`${this.baseUrl}?f=get_email_list&sid_token=${token}`);
+      const data = response.data as Record<string, unknown>;
+      return Array.isArray(data.list) ? data.list as Record<string, unknown>[] : [];
     } catch (error) {
-      console.error('Error fetching Guerrilla Mail emails:', error);
-      throw new Error('Failed to fetch emails');
+      console.error('Error getting email list:', error);
+      return [];
     }
   }
 
   // Get specific email content
-  async getEmailContent(emailId: string): Promise<any> {
-    if (!this.token) {
-      throw new Error('No token available. Get email address first.');
+  async getEmail(emailId: string, sidToken?: string): Promise<Record<string, unknown> | null> {
+    const token = sidToken || this.sidToken;
+    if (!token) {
+      throw new Error('No session token available');
     }
 
     try {
-      const response = await axios.get(`${this.baseUrl}?f=fetch_email&sid_token=${this.token}&email_id=${emailId}`, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-
-      return response.data;
+      const response = await axios.get(`${this.baseUrl}?f=fetch_email&sid_token=${token}&email_id=${emailId}`);
+      return response.data as Record<string, unknown>;
     } catch (error) {
-      console.error('Error fetching Guerrilla Mail email content:', error);
-      throw new Error('Failed to fetch email content');
+      console.error('Error getting email content:', error);
+      return null;
     }
   }
 
-  // Wait for verification email from Manus
+  // Wait for verification email and extract link
   async waitForVerificationEmail(
-    emailAddress: string,
-    timeoutMs: number = 120000 // 2 minutes
-  ): Promise<any> {
+    email: string,
+    timeoutMs: number = 60000
+  ): Promise<Record<string, unknown>> {
     const startTime = Date.now();
-    const checkInterval = 5000; // Check every 5 seconds
+    const pollInterval = 5000; // 5 seconds
 
     while (Date.now() - startTime < timeoutMs) {
       try {
-        const emails = await this.getEmails();
+        const emails = await this.getEmailList();
         
-        // Look for emails from Manus
-        const verificationEmail = emails.find((email: GuerrillaMessage) => 
-          email.mail_from.toLowerCase().includes('manus') ||
-          email.mail_subject.toLowerCase().includes('verify') ||
-          email.mail_subject.toLowerCase().includes('confirm') ||
-          email.mail_excerpt.toLowerCase().includes('verification')
-        );
+        // Look for verification emails
+        const verificationEmail = emails.find((emailItem: Record<string, unknown>) => {
+          const subject = String(emailItem.mail_subject || '').toLowerCase();
+          const from = String(emailItem.mail_from || '').toLowerCase();
+          return (
+            subject.includes('verify') || 
+            subject.includes('confirmation') || 
+            subject.includes('activate') ||
+            from.includes('manus')
+          );
+        });
 
         if (verificationEmail) {
           // Get full email content
-          const fullEmail = await this.getEmailContent(verificationEmail.mail_id);
-          return fullEmail;
+          const fullEmail = await this.getEmail(String(verificationEmail.mail_id || ''));
+          if (fullEmail) {
+            // Extract verification link
+            const verificationLink = this.extractVerificationLink(
+              String(fullEmail.mail_body || '')
+            );
+            
+            return {
+              email: fullEmail,
+              verificationLink,
+              success: !!verificationLink,
+            };
+          }
         }
 
-        // Wait before next check
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
       } catch (error) {
-        console.error('Error checking for verification email:', error);
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        console.error('Error polling for emails:', error);
       }
     }
 
-    throw new Error('Verification email timeout');
+    throw new Error('Verification email not received within timeout period');
   }
 
   // Extract verification link from email content
   extractVerificationLink(emailContent: string): string | null {
-    // Common patterns for verification links
+    // Common verification link patterns
     const patterns = [
       /https?:\/\/[^\s]+verify[^\s]*/gi,
       /https?:\/\/[^\s]+confirm[^\s]*/gi,
-      /https?:\/\/[^\s]+activation[^\s]*/gi,
+      /https?:\/\/[^\s]+activate[^\s]*/gi,
       /https?:\/\/manus\.im[^\s]*/gi,
     ];
 
@@ -144,19 +131,5 @@ export class GuerrillaMailClient {
 
     return null;
   }
-
-  // Get current email address
-  getCurrentEmail(): string | null {
-    return this.email;
-  }
-
-  // Get current token
-  getCurrentToken(): string | null {
-    return this.token;
-  }
-}
-
-export function getGuerrillaMailClient(): GuerrillaMailClient {
-  return new GuerrillaMailClient();
 }
 

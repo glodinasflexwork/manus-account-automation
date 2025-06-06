@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGuerrillaMailClient } from '@/lib/guerrilla-mail';
+import { GuerrillaMailClient } from '@/lib/guerrilla-mail';
 
 export async function GET() {
   try {
-    const client = getGuerrillaMailClient();
-    const emailData = await client.getEmailAddress();
+    const client = new GuerrillaMailClient();
+    const result = await client.getEmailAddress();
     
-    return NextResponse.json({ 
-      success: true, 
-      email: emailData.email,
-      token: emailData.token,
-      service: 'guerrilla-mail'
+    return NextResponse.json({
+      success: true,
+      email: result.email,
+      sidToken: result.sidToken,
     });
   } catch (error) {
-    console.error('Error generating Guerrilla Mail email:', error);
+    console.error('Guerrilla Mail API error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to generate temporary email' },
+      { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Failed to generate email address'
+      },
       { status: 500 }
     );
   }
@@ -23,53 +25,31 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, token, emailId } = await request.json();
-    const client = getGuerrillaMailClient();
+    const body = await request.json() as Record<string, unknown>;
+    const email = String(body.email || '');
     
-    if (action === 'check_emails') {
-      // Set the token for this client instance
-      (client as any).token = token;
-      const emails = await client.getEmails();
-      
-      return NextResponse.json({ 
-        success: true, 
-        emails,
-        count: emails.length 
-      });
-    }
-    
-    if (action === 'get_email_content' && emailId) {
-      (client as any).token = token;
-      const emailContent = await client.getEmailContent(emailId);
-      
-      return NextResponse.json({ 
-        success: true, 
-        email: emailContent 
-      });
-    }
-    
-    if (action === 'wait_for_verification') {
-      (client as any).token = token;
-      const verificationEmail = await client.waitForVerificationEmail('', 120000);
-      const verificationLink = client.extractVerificationLink(
-        verificationEmail.mail_body || verificationEmail.mail_excerpt || ''
+    if (!email) {
+      return NextResponse.json(
+        { success: false, error: 'Email address is required' },
+        { status: 400 }
       );
-      
-      return NextResponse.json({ 
-        success: true, 
-        email: verificationEmail,
-        verificationLink 
-      });
     }
+
+    const client = new GuerrillaMailClient();
+    const result = await client.waitForVerificationEmail(email);
     
-    return NextResponse.json(
-      { success: false, error: 'Invalid action specified' },
-      { status: 400 }
-    );
+    return NextResponse.json({
+      success: true,
+      verificationLink: result.verificationLink,
+      email: result.email,
+    });
   } catch (error) {
-    console.error('Error in Guerrilla Mail operation:', error);
+    console.error('Email verification error:', error);
     return NextResponse.json(
-      { success: false, error: 'Guerrilla Mail operation failed' },
+      { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Failed to find verification email'
+      },
       { status: 500 }
     );
   }
