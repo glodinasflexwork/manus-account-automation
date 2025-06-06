@@ -30,8 +30,14 @@ export default function Home() {
   ]);
 
   const [isRunning, setIsRunning] = useState(false);
+  const [useRetryMode, setUseRetryMode] = useState(true);
+  const [retryConfig, setRetryConfig] = useState({
+    maxRetries: 5,
+    timeoutMinutes: 15
+  });
   const [accountData, setAccountData] = useState<AccountData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retryStats, setRetryStats] = useState<Record<string, unknown> | null>(null);
 
   const updateStep = (stepId: string, status: Step['status'], message?: string) => {
     setSteps(prev => prev.map(step => 
@@ -43,8 +49,133 @@ export default function Home() {
     setIsRunning(true);
     setError(null);
     setAccountData(null);
+    setRetryStats(null);
 
     try {
+      if (useRetryMode) {
+        // Use intelligent retry automation
+        updateStep('email', 'running', 'Starting intelligent retry automation...');
+        updateStep('phone', 'running', 'Will generate multiple combinations as needed...');
+        updateStep('account', 'running', 'Will retry until successful or timeout...');
+        updateStep('verify_email', 'pending', 'Will verify after account creation...');
+        updateStep('verify_phone', 'pending', 'Will verify after account creation...');
+
+        console.log('🚀 Starting retry automation mode');
+        
+        const retryResponse = await fetch('/api/retry-automation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            maxRetries: retryConfig.maxRetries,
+            timeoutMinutes: retryConfig.timeoutMinutes,
+            initialDelay: 30000, // 30 seconds
+            maxDelay: 180000, // 3 minutes max
+            backoffMultiplier: 1.3
+          }),
+        });
+
+        const retryResult = await retryResponse.json();
+        
+        if (retryResult.success) {
+          // Update steps with success
+          updateStep('email', 'completed', `Email: ${retryResult.credentials.email}`);
+          updateStep('phone', 'completed', 
+            retryResult.credentials.phoneNumber 
+              ? `Phone: ${retryResult.credentials.phoneNumber} (via ${retryResult.credentials.phoneService})`
+              : 'Skipped (no phone available)'
+          );
+          updateStep('account', 'completed', 
+            `Account created successfully after ${retryResult.stats.totalAttempts} attempts in ${retryResult.stats.totalTimeSeconds}s`
+          );
+
+          setAccountData(retryResult.accountData);
+          setRetryStats(retryResult.stats);
+
+          // Continue with email verification
+          if (retryResult.credentials.email) {
+            updateStep('verify_email', 'running', 'Verifying email...');
+            
+            try {
+              const verifyEmailResponse = await fetch('/api/guerrilla-mail', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: retryResult.credentials.email }),
+              });
+              
+              const verifyEmailResult = await verifyEmailResponse.json();
+              
+              if (verifyEmailResult.success && verifyEmailResult.verificationLink) {
+                updateStep('verify_email', 'completed', 'Email verified successfully');
+              } else {
+                updateStep('verify_email', 'error', 'Email verification failed');
+              }
+            } catch (emailError) {
+              updateStep('verify_email', 'error', 'Email verification error');
+            }
+          }
+
+          // Continue with phone verification if available
+          if (retryResult.credentials.phoneNumber && retryResult.credentials.phoneService) {
+            updateStep('verify_phone', 'running', 'Verifying phone...');
+            
+            try {
+              if (retryResult.credentials.phoneService === 'sms-activate') {
+                // Handle SMS-Activate verification
+                updateStep('verify_phone', 'completed', 'Phone verification handled by retry system');
+              } else {
+                // Handle free SMS service verification
+                const waitResponse = await fetch('/api/free-sms', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ 
+                    phoneNumber: retryResult.credentials.phoneNumber,
+                    service: retryResult.credentials.phoneService,
+                    action: 'wait',
+                    timeout: 2
+                  }),
+                });
+                
+                const waitData = await waitResponse.json();
+                
+                if (waitData.success && waitData.code) {
+                  updateStep('verify_phone', 'completed', `SMS code received: ${waitData.code}`);
+                } else {
+                  updateStep('verify_phone', 'error', 'SMS verification timeout');
+                }
+              }
+            } catch (phoneError) {
+              updateStep('verify_phone', 'error', 'Phone verification error');
+            }
+          } else {
+            updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
+          }
+
+        } else {
+          throw new Error(retryResult.error || 'Retry automation failed');
+        }
+
+      } else {
+        // Use original single-attempt automation
+        await runSingleAttemptAutomation();
+      }
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      setError(errorMessage);
+      console.error('Automation error:', err);
+      
+      // Mark remaining steps as error
+      setSteps(prev => prev.map(step => 
+        step.status === 'running' || step.status === 'pending' 
+          ? { ...step, status: 'error', message: 'Stopped due to error' }
+          : step
+      ));
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const runSingleAttemptAutomation = async () => {
       // Step 1: Generate email address using Guerrilla Mail
       updateStep('email', 'running', 'Generating free temporary email address...');
       
@@ -58,34 +189,54 @@ export default function Home() {
       const generatedEmail = emailData.email;
       updateStep('email', 'completed', `Email: ${generatedEmail}`);
 
-      // Step 2: Get phone number using free SMS-Activate
-      updateStep('phone', 'running', 'Getting free phone number via SMS-Activate...');
-      
-      const servicesResponse = await fetch('/api/sms-activate');
-      const servicesData = await servicesResponse.json();
+      // Step 2: Get phone number using multiple free SMS services
+      updateStep('phone', 'running', 'Getting free phone number from multiple services...');
       
       let phoneNumber = null;
       let verificationId = null;
+      let smsService = null;
       
-      if (servicesData.success) {
-        // Create a verification for Manus service
-        const createVerificationResponse = await fetch('/api/sms-activate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceId: 'manus' }),
-        });
+      // Try free SMS services first
+      try {
+        const freeSMSResponse = await fetch('/api/free-sms');
+        const freeSMSData = await freeSMSResponse.json();
         
-        const verificationData = await createVerificationResponse.json();
-        
-        if (verificationData.success) {
-          phoneNumber = verificationData.verification.number;
-          verificationId = verificationData.verification.id;
-          updateStep('phone', 'completed', `Free phone number: ${phoneNumber}`);
+        if (freeSMSData.success) {
+          phoneNumber = freeSMSData.phoneNumber;
+          verificationId = freeSMSData.id;
+          smsService = freeSMSData.service;
+          updateStep('phone', 'completed', `Free phone number: ${phoneNumber} (via ${smsService})`);
         } else {
-          updateStep('phone', 'completed', 'Skipped (free service unavailable)');
+          console.log('Free SMS services failed, trying SMS-Activate...');
+          
+          // Fallback to SMS-Activate if available
+          const servicesResponse = await fetch('/api/sms-activate');
+          const servicesData = await servicesResponse.json();
+          
+          if (servicesData.success) {
+            const createVerificationResponse = await fetch('/api/sms-activate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ serviceId: 'manus' }),
+            });
+            
+            const verificationData = await createVerificationResponse.json();
+            
+            if (verificationData.success) {
+              phoneNumber = verificationData.verification.number;
+              verificationId = verificationData.verification.id;
+              smsService = 'sms-activate';
+              updateStep('phone', 'completed', `Phone number: ${phoneNumber} (via SMS-Activate)`);
+            } else {
+              updateStep('phone', 'completed', 'Skipped (all services unavailable)');
+            }
+          } else {
+            updateStep('phone', 'completed', 'Skipped (all services unavailable)');
+          }
         }
-      } else {
-        updateStep('phone', 'completed', 'Skipped (no free services available)');
+      } catch (error) {
+        console.error('Phone number error:', error);
+        updateStep('phone', 'completed', 'Skipped (service error)');
       }
 
       // Step 3: Create Manus account
@@ -124,53 +275,75 @@ export default function Home() {
       }
 
       // Step 5: Verify phone number (if we have one)
-      if (phoneNumber && verificationId) {
-        updateStep('verify_phone', 'running', 'Waiting for free SMS verification...');
+      if (phoneNumber && verificationId && smsService) {
+        updateStep('verify_phone', 'running', `Waiting for free SMS verification via ${smsService}...`);
         
-        // Poll for SMS verification code
         let smsReceived = false;
-        const maxAttempts = 12; // 2 minutes with 10-second intervals
         
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+        if (smsService === 'sms-activate') {
+          // Use SMS-Activate API for verification
+          const maxAttempts = 12; // 2 minutes with 10-second intervals
           
-          const checkResponse = await fetch(`/api/sms-activate/${verificationId}`);
-          const checkData = await checkResponse.json();
-          
-          if (checkData.success && checkData.verification.code) {
-            updateStep('verify_phone', 'completed', `Free SMS code received: ${checkData.verification.code}`);
-            smsReceived = true;
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
             
-            // Confirm SMS received
-            await fetch(`/api/sms-activate/${verificationId}`, {
+            const checkResponse = await fetch(`/api/sms-activate/${verificationId}`);
+            const checkData = await checkResponse.json();
+            
+            if (checkData.success && checkData.verification.code) {
+              updateStep('verify_phone', 'completed', `SMS code received: ${checkData.verification.code} (via ${smsService})`);
+              smsReceived = true;
+              
+              // Confirm SMS received
+              await fetch(`/api/sms-activate/${verificationId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: '6' }),
+              });
+              break;
+            }
+          }
+        } else {
+          // Use free SMS services for verification
+          try {
+            const waitResponse = await fetch('/api/free-sms', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: '6' }),
+              body: JSON.stringify({ 
+                phoneNumber: phoneNumber,
+                service: smsService,
+                action: 'wait',
+                timeout: 3 // 3 minutes timeout
+              }),
             });
-            break;
+            
+            const waitData = await waitResponse.json();
+            
+            if (waitData.success && waitData.code) {
+              updateStep('verify_phone', 'completed', `Free SMS code received: ${waitData.code} (via ${smsService})`);
+              smsReceived = true;
+            } else {
+              updateStep('verify_phone', 'error', `SMS timeout via ${smsService}`);
+            }
+          } catch (error) {
+            console.error('Free SMS verification error:', error);
+            updateStep('verify_phone', 'error', `SMS verification failed via ${smsService}`);
           }
         }
         
-        if (!smsReceived) {
-          updateStep('verify_phone', 'error', 'Free SMS verification timeout');
+        if (!smsReceived && smsService === 'sms-activate') {
+          updateStep('verify_phone', 'error', 'SMS verification timeout');
         }
       } else {
-        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
+        updateStep('verify_phone', 'completed', 'Skipped (no phone number available)');
       }
-
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
-      setError(errorMessage);
-      console.error('Automation error:', err);
-    } finally {
-      setIsRunning(false);
-    }
   };
 
   const resetAutomation = () => {
     setSteps(prev => prev.map(step => ({ ...step, status: 'pending', message: undefined })));
     setAccountData(null);
     setError(null);
+    setRetryStats(null);
   };
 
   const getStepIcon = (status: Step['status']) => {
@@ -209,28 +382,83 @@ export default function Home() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex gap-4">
-              <Button 
-                onClick={runAutomation} 
-                disabled={isRunning}
-                className="flex-1"
-              >
-                {isRunning ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Running Automation...
-                  </>
-                ) : (
-                  'Start Account Creation'
-                )}
-              </Button>
-              <Button 
-                onClick={resetAutomation} 
-                variant="outline"
-                disabled={isRunning}
-              >
-                Reset
-              </Button>
+            <div className="space-y-4">
+              {/* Retry Mode Toggle */}
+              <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                <div>
+                  <label className="flex items-center gap-2 font-medium text-blue-900">
+                    <input
+                      type="checkbox"
+                      checked={useRetryMode}
+                      onChange={(e) => setUseRetryMode(e.target.checked)}
+                      disabled={isRunning}
+                      className="rounded"
+                    />
+                    Smart Retry Mode (Recommended)
+                  </label>
+                  <p className="text-sm text-blue-700 mt-1">
+                    Automatically retries with new email/phone combinations if Manus rejects them
+                  </p>
+                </div>
+              </div>
+
+              {/* Retry Configuration */}
+              {useRetryMode && (
+                <div className="grid grid-cols-2 gap-4 p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Max Attempts
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={retryConfig.maxRetries}
+                      onChange={(e) => setRetryConfig(prev => ({ ...prev, maxRetries: parseInt(e.target.value) || 5 }))}
+                      disabled={isRunning}
+                      className="w-full px-3 py-1 border rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Timeout (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="60"
+                      value={retryConfig.timeoutMinutes}
+                      onChange={(e) => setRetryConfig(prev => ({ ...prev, timeoutMinutes: parseInt(e.target.value) || 15 }))}
+                      disabled={isRunning}
+                      className="w-full px-3 py-1 border rounded text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-4">
+                <Button 
+                  onClick={runAutomation} 
+                  disabled={isRunning}
+                  className="flex-1"
+                >
+                  {isRunning ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {useRetryMode ? 'Running Smart Retry...' : 'Running Automation...'}
+                    </>
+                  ) : (
+                    useRetryMode ? 'Start Smart Retry Automation' : 'Start Single Attempt'
+                  )}
+                </Button>
+                <Button 
+                  onClick={resetAutomation} 
+                  variant="outline"
+                  disabled={isRunning}
+                >
+                  Reset
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -239,7 +467,7 @@ export default function Home() {
           <CardHeader>
             <CardTitle>Automation Progress</CardTitle>
             <CardDescription>
-              Complete workflow using free services (Guerrilla Mail + SMS-Activate)
+              Complete workflow using multiple free services (Guerrilla Mail + 6 Free SMS Services + SMS-Activate backup)
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -309,6 +537,51 @@ export default function Home() {
                   </div>
                 )}
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {retryStats && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-blue-500" />
+                Retry Automation Statistics
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-blue-600">{String(retryStats.totalAttempts || 0)}</div>
+                  <div className="text-sm text-gray-500">Total Attempts</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-green-600">{String(retryStats.successfulAttempts || 0)}</div>
+                  <div className="text-sm text-gray-500">Successful</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-red-600">{String(retryStats.failedAttempts || 0)}</div>
+                  <div className="text-sm text-gray-500">Failed</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-purple-600">{String(retryStats.totalTimeSeconds || 0)}s</div>
+                  <div className="text-sm text-gray-500">Total Time</div>
+                </div>
+              </div>
+              
+              {retryStats.rejectionReasons && typeof retryStats.rejectionReasons === 'object' && Object.keys(retryStats.rejectionReasons).length > 0 ? (
+                <div className="mt-4">
+                  <h4 className="font-medium text-gray-700 mb-2">Common Rejection Reasons:</h4>
+                  <div className="space-y-1">
+                    {Object.entries(retryStats.rejectionReasons as Record<string, number>).map(([reason, count]) => (
+                      <div key={reason} className="flex justify-between text-sm">
+                        <span className="text-gray-600 truncate">{reason}</span>
+                        <span className="text-gray-800 font-medium">{count}x</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         )}
