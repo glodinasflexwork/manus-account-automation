@@ -15,13 +15,23 @@ export class ManusAutomation {
         // Vercel/serverless configuration
         try {
           const chromium = await import('@sparticuz/chromium');
+          
+          // Configure chromium for Vercel
+          await chromium.default.font('https://raw.githack.com/googlei18n/noto-emoji/master/fonts/NotoColorEmoji.ttf');
+          
           browserOptions = {
-            args: chromium.default.args,
+            args: [
+              ...chromium.default.args,
+              '--hide-scrollbars',
+              '--disable-web-security',
+              '--disable-features=VizDisplayCompositor',
+            ],
             defaultViewport: chromium.default.defaultViewport,
             executablePath: await chromium.default.executablePath(),
             headless: chromium.default.headless,
           };
-        } catch {
+        } catch (error) {
+          console.log('Chromium package not available, using fallback configuration');
           // Fallback for production without chromium package
           browserOptions = {
             headless: true,
@@ -33,6 +43,8 @@ export class ManusAutomation {
               '--no-first-run',
               '--no-zygote',
               '--disable-gpu',
+              '--disable-web-security',
+              '--disable-features=VizDisplayCompositor',
             ],
           };
         }
@@ -53,7 +65,7 @@ export class ManusAutomation {
       );
     } catch (error) {
       console.error('Failed to initialize browser:', error);
-      throw new Error('Browser initialization failed');
+      throw new Error(`Browser initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
