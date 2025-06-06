@@ -73,7 +73,7 @@ export default function Home() {
 
       updateStep('email', 'completed', `Generated: ${emailData.email}`);
 
-      // Step 2: Get phone number
+      // Step 2: Get phone number for Manus service specifically
       updateStep('phone', 'running', 'Fetching TextVerified services...');
       
       const servicesResponse = await fetch('/api/textverified');
@@ -83,24 +83,35 @@ export default function Home() {
       let verificationId = null;
       
       if (servicesData.success && servicesData.services.length > 0) {
-        // Create a verification for the first available service
-        const createVerificationResponse = await fetch('/api/textverified', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ serviceId: servicesData.services[0].id }),
-        });
+        // Look specifically for Manus service
+        const manusService = servicesData.services.find((service: any) => 
+          service.name && service.name.toLowerCase().includes('manus')
+        );
         
-        const verificationData = await createVerificationResponse.json();
-        
-        if (verificationData.success) {
-          phoneNumber = verificationData.verification.number;
-          verificationId = verificationData.verification.id;
-          updateStep('phone', 'completed', `Phone number: ${phoneNumber}`);
+        if (manusService) {
+          updateStep('phone', 'running', `Found Manus service (${manusService.cost || '0.50'}). Requesting phone number...`);
+          
+          // Create a verification for the Manus service
+          const createVerificationResponse = await fetch('/api/textverified', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serviceId: manusService.id }),
+          });
+          
+          const verificationData = await createVerificationResponse.json();
+          
+          if (verificationData.success) {
+            phoneNumber = verificationData.verification.number;
+            verificationId = verificationData.verification.id;
+            updateStep('phone', 'completed', `Phone number for Manus: ${phoneNumber}`);
+          } else {
+            updateStep('phone', 'error', 'Failed to get Manus phone number');
+          }
         } else {
-          updateStep('phone', 'completed', 'Skipped (service unavailable)');
+          updateStep('phone', 'error', 'Manus service not available on TextVerified');
         }
       } else {
-        updateStep('phone', 'completed', 'Skipped (no services available)');
+        updateStep('phone', 'error', 'No TextVerified services available');
       }
 
       // Step 3: Create Manus account
@@ -158,11 +169,11 @@ export default function Home() {
         updateStep('verify_email', 'error', 'No verification link found in email');
       }
 
-      // Step 5: Verify phone number (if we have one)
+      // Step 5: Verify phone number with Manus (if we have one)
       if (phoneNumber && verificationId) {
-        updateStep('verify_phone', 'running', 'Waiting for SMS verification...');
+        updateStep('verify_phone', 'running', 'Waiting for Manus SMS verification...');
         
-        // Poll for SMS verification code
+        // Poll for SMS verification code from Manus
         let smsReceived = false;
         const maxAttempts = 12; // 2 minutes with 10-second intervals
         
@@ -173,17 +184,19 @@ export default function Home() {
           const checkData = await checkResponse.json();
           
           if (checkData.success && checkData.verification.code) {
-            updateStep('verify_phone', 'completed', `SMS code received: ${checkData.verification.code}`);
+            updateStep('verify_phone', 'completed', `Manus SMS code received: ${checkData.verification.code}`);
             smsReceived = true;
             break;
           }
+          
+          updateStep('verify_phone', 'running', `Waiting for Manus SMS... (${attempt + 1}/${maxAttempts})`);
         }
         
         if (!smsReceived) {
-          updateStep('verify_phone', 'error', 'SMS verification timeout');
+          updateStep('verify_phone', 'error', 'Manus SMS verification timeout');
         }
       } else {
-        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
+        updateStep('verify_phone', 'completed', 'Skipped (no Manus phone number)');
       }
 
     } catch (err) {
