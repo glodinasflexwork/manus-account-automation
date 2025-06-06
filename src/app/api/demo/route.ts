@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
     const { mode } = await request.json();
     
     if (mode === 'demo') {
-      // Simulate the complete automation workflow with phone verification
+      // Simulate the complete automation workflow with correct order
       return NextResponse.json({
         success: true,
         demo: true,
@@ -26,13 +26,6 @@ export async function POST(request: NextRequest) {
             data: { phone: '+1234567890', verificationId: 'demo-123' }
           },
           {
-            id: 'verify_phone',
-            name: 'Verify Phone Number',
-            status: 'completed',
-            message: 'SMS code received: 123456',
-            data: { smsCode: '123456' }
-          },
-          {
             id: 'account',
             name: 'Create Manus Account',
             status: 'completed',
@@ -49,6 +42,13 @@ export async function POST(request: NextRequest) {
             status: 'completed',
             message: 'Email verified successfully',
             data: { verified: true }
+          },
+          {
+            id: 'verify_phone',
+            name: 'Verify Phone Number',
+            status: 'completed',
+            message: 'SMS code received: 123456',
+            data: { smsCode: '123456' }
           }
         ]
       });

@@ -26,9 +26,9 @@ export default function Home() {
   const [steps, setSteps] = useState<AutomationStep[]>([
     { id: 'email', name: 'Generate Email Address', status: 'pending' },
     { id: 'phone', name: 'Get Phone Number', status: 'pending' },
-    { id: 'verify_phone', name: 'Verify Phone Number', status: 'pending' },
     { id: 'account', name: 'Create Manus Account', status: 'pending' },
     { id: 'verify_email', name: 'Verify Email', status: 'pending' },
+    { id: 'verify_phone', name: 'Verify Phone Number', status: 'pending' },
   ]);
   const [accountData, setAccountData] = useState<AccountData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -103,35 +103,7 @@ export default function Home() {
         updateStep('phone', 'completed', 'Skipped (no services available)');
       }
 
-      // Step 3: Verify phone number (if we have one)
-      if (phoneNumber && verificationId) {
-        updateStep('verify_phone', 'running', 'Waiting for SMS verification...');
-        
-        // Poll for SMS verification code
-        let smsReceived = false;
-        const maxAttempts = 12; // 2 minutes with 10-second intervals
-        
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
-          
-          const checkResponse = await fetch(`/api/textverified/${verificationId}`);
-          const checkData = await checkResponse.json();
-          
-          if (checkData.success && checkData.verification.code) {
-            updateStep('verify_phone', 'completed', `SMS code received: ${checkData.verification.code}`);
-            smsReceived = true;
-            break;
-          }
-        }
-        
-        if (!smsReceived) {
-          updateStep('verify_phone', 'error', 'SMS verification timeout');
-        }
-      } else {
-        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
-      }
-
-      // Step 4: Create Manus account
+      // Step 3: Create Manus account
       updateStep('account', 'running', 'Creating Manus account...');
       
       const accountResponse = await fetch('/api/manus', {
@@ -184,6 +156,34 @@ export default function Home() {
         }
       } else {
         updateStep('verify_email', 'error', 'No verification link found in email');
+      }
+
+      // Step 5: Verify phone number (if we have one)
+      if (phoneNumber && verificationId) {
+        updateStep('verify_phone', 'running', 'Waiting for SMS verification...');
+        
+        // Poll for SMS verification code
+        let smsReceived = false;
+        const maxAttempts = 12; // 2 minutes with 10-second intervals
+        
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          
+          const checkResponse = await fetch(`/api/textverified/${verificationId}`);
+          const checkData = await checkResponse.json();
+          
+          if (checkData.success && checkData.verification.code) {
+            updateStep('verify_phone', 'completed', `SMS code received: ${checkData.verification.code}`);
+            smsReceived = true;
+            break;
+          }
+        }
+        
+        if (!smsReceived) {
+          updateStep('verify_phone', 'error', 'SMS verification timeout');
+        }
+      } else {
+        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
       }
 
     } catch (err) {
