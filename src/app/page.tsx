@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, CheckCircle, XCircle, Mail, User } from 'lucide-react';
 
@@ -15,9 +15,9 @@ interface Step {
 
 interface AccountData {
   email: string;
-  phone: string;
   password: string;
   fullName: string;
+  phone?: string;
 }
 
 export default function Home() {
@@ -33,20 +33,20 @@ export default function Home() {
   const [accountData, setAccountData] = useState<AccountData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const updateStep = (id: string, status: Step['status'], message?: string) => {
+  const updateStep = (stepId: string, status: Step['status'], message?: string) => {
     setSteps(prev => prev.map(step => 
-      step.id === id ? { ...step, status, message } : step
+      step.id === stepId ? { ...step, status, message } : step
     ));
   };
 
-  const startAutomation = async () => {
+  const runAutomation = async () => {
     setIsRunning(true);
     setError(null);
     setAccountData(null);
 
     try {
       // Step 1: Generate email address using Guerrilla Mail
-      updateStep('email', 'running', 'Generating temporary email address...');
+      updateStep('email', 'running', 'Generating free temporary email address...');
       
       const emailResponse = await fetch('/api/guerrilla-mail');
       const emailData = await emailResponse.json();
@@ -58,44 +58,34 @@ export default function Home() {
       const generatedEmail = emailData.email;
       updateStep('email', 'completed', `Email: ${generatedEmail}`);
 
-      // Step 2: Get phone number for Manus service
-      updateStep('phone', 'running', 'Searching for Manus service...');
+      // Step 2: Get phone number using free SMS-Activate
+      updateStep('phone', 'running', 'Getting free phone number via SMS-Activate...');
       
-      const servicesResponse = await fetch('/api/textverified');
+      const servicesResponse = await fetch('/api/sms-activate');
       const servicesData = await servicesResponse.json();
       
       let phoneNumber = null;
       let verificationId = null;
       
-      if (servicesData.success && servicesData.services.length > 0) {
-        // Look for Manus service specifically
-        const manusService = servicesData.services.find((service: Record<string, unknown>) => 
-          String(service.name).toLowerCase().includes('manus')
-        );
+      if (servicesData.success) {
+        // Create a verification for Manus service
+        const createVerificationResponse = await fetch('/api/sms-activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serviceId: 'manus' }),
+        });
         
-        if (manusService) {
-          updateStep('phone', 'running', `Found Manus service ($0.50). Requesting phone number...`);
-          
-          const createVerificationResponse = await fetch('/api/textverified', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ serviceId: manusService.id }),
-          });
-          
-          const verificationData = await createVerificationResponse.json();
-          
-          if (verificationData.success) {
-            phoneNumber = verificationData.verification.number;
-            verificationId = verificationData.verification.id;
-            updateStep('phone', 'completed', `Phone number for Manus: ${phoneNumber}`);
-          } else {
-            updateStep('phone', 'completed', 'Manus service unavailable, skipping phone verification');
-          }
+        const verificationData = await createVerificationResponse.json();
+        
+        if (verificationData.success) {
+          phoneNumber = verificationData.verification.number;
+          verificationId = verificationData.verification.id;
+          updateStep('phone', 'completed', `Free phone number: ${phoneNumber}`);
         } else {
-          updateStep('phone', 'completed', 'Manus service not found, skipping phone verification');
+          updateStep('phone', 'completed', 'Skipped (free service unavailable)');
         }
       } else {
-        updateStep('phone', 'completed', 'No services available, skipping phone verification');
+        updateStep('phone', 'completed', 'Skipped (no free services available)');
       }
 
       // Step 3: Create Manus account
@@ -133,9 +123,9 @@ export default function Home() {
         updateStep('verify_email', 'error', 'No verification link found in email');
       }
 
-      // Step 5: Verify phone number with Manus (if we have one)
+      // Step 5: Verify phone number (if we have one)
       if (phoneNumber && verificationId) {
-        updateStep('verify_phone', 'running', 'Waiting for Manus SMS verification...');
+        updateStep('verify_phone', 'running', 'Waiting for free SMS verification...');
         
         // Poll for SMS verification code
         let smsReceived = false;
@@ -144,23 +134,28 @@ export default function Home() {
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
           
-          updateStep('verify_phone', 'running', `Waiting for Manus SMS... (${attempt + 1}/${maxAttempts})`);
-          
-          const checkResponse = await fetch(`/api/textverified/${verificationId}`);
+          const checkResponse = await fetch(`/api/sms-activate/${verificationId}`);
           const checkData = await checkResponse.json();
           
           if (checkData.success && checkData.verification.code) {
-            updateStep('verify_phone', 'completed', `Manus SMS code received: ${checkData.verification.code}`);
+            updateStep('verify_phone', 'completed', `Free SMS code received: ${checkData.verification.code}`);
             smsReceived = true;
+            
+            // Confirm SMS received
+            await fetch(`/api/sms-activate/${verificationId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: '6' }),
+            });
             break;
           }
         }
         
         if (!smsReceived) {
-          updateStep('verify_phone', 'error', 'Manus SMS verification timeout');
+          updateStep('verify_phone', 'error', 'Free SMS verification timeout');
         }
       } else {
-        updateStep('verify_phone', 'completed', 'Skipped (no phone number available)');
+        updateStep('verify_phone', 'completed', 'Skipped (no phone number)');
       }
 
     } catch (err) {
@@ -178,8 +173,8 @@ export default function Home() {
     setError(null);
   };
 
-  const getStepIcon = (step: Step) => {
-    switch (step.status) {
+  const getStepIcon = (status: Step['status']) => {
+    switch (status) {
       case 'running':
         return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
       case 'completed':
@@ -193,61 +188,32 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-4xl mx-auto">
-        <div className="text-center mb-8">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
             Manus Account Automation
           </h1>
           <p className="text-lg text-gray-600">
-            Automated account creation using TextVerified and Guerrilla Mail
+            Automated account creation with free email and SMS services
           </p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Configuration Panel */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <User className="h-5 w-5" />
-                Configuration
-              </CardTitle>
-              <CardDescription>
-                Automation settings and invitation details
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <p className="text-sm font-medium text-blue-900">Manus Invitation Code</p>
-                <p className="text-lg font-mono text-blue-700">QVDRZAYJMTKC</p>
-              </div>
-              <div className="p-3 bg-green-50 rounded-lg">
-                <p className="text-sm font-medium text-green-900">Email Service</p>
-                <p className="text-sm text-green-700">Guerrilla Mail (Free)</p>
-              </div>
-              <div className="p-3 bg-purple-50 rounded-lg">
-                <p className="text-sm font-medium text-purple-900">SMS Service</p>
-                <p className="text-sm text-purple-700">TextVerified - Manus ($0.50)</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Control Panel */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-5 w-5" />
-                Automation Control
-              </CardTitle>
-              <CardDescription>
-                Start or reset the account creation process
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <User className="h-5 w-5" />
+              Configuration
+            </CardTitle>
+            <CardDescription>
+              Manus Invitation Code: <code className="bg-gray-100 px-2 py-1 rounded">QVDRZAYJMTKC</code>
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-4">
               <Button 
-                onClick={startAutomation} 
+                onClick={runAutomation} 
                 disabled={isRunning}
-                className="w-full"
-                size="lg"
+                className="flex-1"
               >
                 {isRunning ? (
                   <>
@@ -258,49 +224,48 @@ export default function Home() {
                   'Start Account Creation'
                 )}
               </Button>
-              
               <Button 
                 onClick={resetAutomation} 
                 variant="outline"
-                className="w-full"
                 disabled={isRunning}
               >
                 Reset
               </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-              {error && (
-                <Alert variant="destructive">
-                  <XCircle className="h-4 w-4" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Progress Steps */}
-        <Card className="mt-6">
+        <Card>
           <CardHeader>
             <CardTitle>Automation Progress</CardTitle>
             <CardDescription>
-              Follow the step-by-step account creation process
+              Complete workflow using free services (Guerrilla Mail + SMS-Activate)
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {steps.map((step, index) => (
-                <div key={step.id} className="flex items-center gap-4 p-4 rounded-lg border">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-100">
-                    {getStepIcon(step)}
+                <div key={step.id} className="flex items-start gap-3">
+                  <div className="flex-shrink-0 mt-1">
+                    {getStepIcon(step.status)}
                   </div>
                   <div className="flex-1">
-                    <h3 className="font-medium text-gray-900">{step.title}</h3>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{index + 1}. {step.title}</span>
+                      {step.status === 'completed' && (
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                          Complete
+                        </span>
+                      )}
+                      {step.status === 'error' && (
+                        <span className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">
+                          Error
+                        </span>
+                      )}
+                    </div>
                     {step.message && (
                       <p className="text-sm text-gray-600 mt-1">{step.message}</p>
                     )}
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    Step {index + 1}
                   </div>
                 </div>
               ))}
@@ -308,33 +273,41 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Results */}
+        {error && (
+          <Alert variant="destructive">
+            <XCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
         {accountData && (
-          <Card className="mt-6">
+          <Card>
             <CardHeader>
-              <CardTitle className="text-green-600">Account Created Successfully!</CardTitle>
-              <CardDescription>
-                Your Manus account has been created with the following details
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-green-500" />
+                Account Created Successfully
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="text-sm font-medium text-gray-900">Email</p>
-                  <p className="text-sm text-gray-700 font-mono">{accountData.email}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium text-gray-500">Email</label>
+                  <p className="font-mono text-sm bg-gray-100 p-2 rounded">{accountData.email}</p>
                 </div>
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="text-sm font-medium text-gray-900">Phone</p>
-                  <p className="text-sm text-gray-700 font-mono">{accountData.phone || 'Not provided'}</p>
+                <div>
+                  <label className="text-sm font-medium text-gray-500">Password</label>
+                  <p className="font-mono text-sm bg-gray-100 p-2 rounded">{accountData.password}</p>
                 </div>
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="text-sm font-medium text-gray-900">Full Name</p>
-                  <p className="text-sm text-gray-700">{accountData.fullName}</p>
+                <div>
+                  <label className="text-sm font-medium text-gray-500">Full Name</label>
+                  <p className="font-mono text-sm bg-gray-100 p-2 rounded">{accountData.fullName}</p>
                 </div>
-                <div className="p-3 bg-gray-50 rounded-lg">
-                  <p className="text-sm font-medium text-gray-900">Password</p>
-                  <p className="text-sm text-gray-700 font-mono">{accountData.password}</p>
-                </div>
+                {accountData.phone && (
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Phone</label>
+                    <p className="font-mono text-sm bg-gray-100 p-2 rounded">{accountData.phone}</p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
