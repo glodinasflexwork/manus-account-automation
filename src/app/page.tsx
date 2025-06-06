@@ -45,33 +45,21 @@ export default function Home() {
     setAccountData(null);
 
     try {
-      // Step 1: Generate email address
-      updateStep('email', 'running', 'Fetching Mailtrap inboxes...');
+      // Step 1: Generate email address using Guerrilla Mail (free)
+      updateStep('email', 'running', 'Generating temporary email address...');
       
-      const inboxesResponse = await fetch('/api/mailtrap');
-      const inboxesData = await inboxesResponse.json();
-      
-      if (!inboxesData.success) {
-        throw new Error('Failed to fetch Mailtrap inboxes');
-      }
-
-      const firstInbox = inboxesData.inboxes[0];
-      if (!firstInbox) {
-        throw new Error('No Mailtrap inboxes available');
-      }
-
-      const emailResponse = await fetch('/api/mailtrap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inboxId: firstInbox.id }),
-      });
-      
+      const emailResponse = await fetch('/api/guerrilla-mail');
       const emailData = await emailResponse.json();
+      
       if (!emailData.success) {
-        throw new Error('Failed to generate email address');
+        throw new Error('Failed to generate temporary email address');
       }
 
-      updateStep('email', 'completed', `Generated: ${emailData.email}`);
+      updateStep('email', 'completed', `Generated: ${emailData.email} (Guerrilla Mail)`);
+      
+      // Store email data for later use
+      const generatedEmail = emailData.email;
+      const emailToken = emailData.token;
 
       // Step 2: Get phone number for Manus service specifically
       updateStep('phone', 'running', 'Fetching TextVerified services...');
@@ -120,7 +108,7 @@ export default function Home() {
       const accountResponse = await fetch('/api/manus', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailData.email }),
+        body: JSON.stringify({ email: generatedEmail }),
       });
       
       const accountResult = await accountResponse.json();
@@ -132,30 +120,31 @@ export default function Home() {
       setAccountData(accountResult.accountData);
       updateStep('account', 'completed', 'Account created successfully');
 
-      // Step 5: Wait for email verification
+      // Step 4: Wait for email verification using Guerrilla Mail
       updateStep('verify_email', 'running', 'Waiting for verification email...');
       
-      const verificationResponse = await fetch(`/api/mailtrap/${firstInbox.id}`, {
+      const verificationResponse = await fetch('/api/guerrilla-mail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          email: emailData.email,
-          timeout: 120000 // 2 minutes
+          action: 'wait_for_verification',
+          token: emailToken
         }),
       });
       
       const verificationData = await verificationResponse.json();
       
-      if (!verificationData.success) {
-        throw new Error('Failed to receive verification email');
-      }
-
-      if (verificationData.verificationLink) {
-        // Complete email verification
+      if (verificationData.success && verificationData.verificationLink) {
+        updateStep('verify_email', 'running', 'Clicking verification link...');
+        
+        // Use browser automation to click the verification link
         const completeResponse = await fetch('/api/manus', {
-          method: 'PUT',
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ verificationLink: verificationData.verificationLink }),
+          body: JSON.stringify({ 
+            action: 'complete_verification',
+            verificationLink: verificationData.verificationLink
+          }),
         });
         
         const completeResult = await completeResponse.json();
