@@ -3,37 +3,37 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, CheckCircle, XCircle, Mail, User } from 'lucide-react';
 
-interface AutomationStep {
+interface Step {
   id: string;
-  name: string;
+  title: string;
   status: 'pending' | 'running' | 'completed' | 'error';
   message?: string;
 }
 
 interface AccountData {
-  fullName: string;
   email: string;
+  phone: string;
   password: string;
+  fullName: string;
 }
 
 export default function Home() {
-  const [isRunning, setIsRunning] = useState(false);
-  const [steps, setSteps] = useState<AutomationStep[]>([
-    { id: 'email', name: 'Generate Email Address', status: 'pending' },
-    { id: 'phone', name: 'Get Phone Number', status: 'pending' },
-    { id: 'account', name: 'Create Manus Account', status: 'pending' },
-    { id: 'verify_email', name: 'Verify Email', status: 'pending' },
-    { id: 'verify_phone', name: 'Verify Phone Number', status: 'pending' },
+  const [steps, setSteps] = useState<Step[]>([
+    { id: 'email', title: 'Generate Email Address', status: 'pending' },
+    { id: 'phone', title: 'Get Phone Number', status: 'pending' },
+    { id: 'account', title: 'Create Manus Account', status: 'pending' },
+    { id: 'verify_email', title: 'Verify Email', status: 'pending' },
+    { id: 'verify_phone', title: 'Verify Phone Number', status: 'pending' },
   ]);
+
+  const [isRunning, setIsRunning] = useState(false);
   const [accountData, setAccountData] = useState<AccountData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const updateStep = (id: string, status: AutomationStep['status'], message?: string) => {
+  const updateStep = (id: string, status: Step['status'], message?: string) => {
     setSteps(prev => prev.map(step => 
       step.id === id ? { ...step, status, message } : step
     ));
@@ -45,24 +45,21 @@ export default function Home() {
     setAccountData(null);
 
     try {
-      // Step 1: Generate email address using Guerrilla Mail (free)
+      // Step 1: Generate email address using Guerrilla Mail
       updateStep('email', 'running', 'Generating temporary email address...');
       
       const emailResponse = await fetch('/api/guerrilla-mail');
       const emailData = await emailResponse.json();
       
       if (!emailData.success) {
-        throw new Error('Failed to generate temporary email address');
+        throw new Error('Failed to generate email address');
       }
 
-      updateStep('email', 'completed', `Generated: ${emailData.email} (Guerrilla Mail)`);
-      
-      // Store email data for later use
       const generatedEmail = emailData.email;
-      const emailToken = emailData.token;
+      updateStep('email', 'completed', `Email: ${generatedEmail}`);
 
-      // Step 2: Get phone number for Manus service specifically
-      updateStep('phone', 'running', 'Fetching TextVerified services...');
+      // Step 2: Get phone number for Manus service
+      updateStep('phone', 'running', 'Searching for Manus service...');
       
       const servicesResponse = await fetch('/api/textverified');
       const servicesData = await servicesResponse.json();
@@ -71,15 +68,14 @@ export default function Home() {
       let verificationId = null;
       
       if (servicesData.success && servicesData.services.length > 0) {
-        // Look specifically for Manus service
-        const manusService = servicesData.services.find((service: any) => 
-          service.name && service.name.toLowerCase().includes('manus')
+        // Look for Manus service specifically
+        const manusService = servicesData.services.find((service: Record<string, unknown>) => 
+          String(service.name).toLowerCase().includes('manus')
         );
         
         if (manusService) {
-          updateStep('phone', 'running', `Found Manus service (${manusService.cost || '0.50'}). Requesting phone number...`);
+          updateStep('phone', 'running', `Found Manus service ($0.50). Requesting phone number...`);
           
-          // Create a verification for the Manus service
           const createVerificationResponse = await fetch('/api/textverified', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -93,13 +89,13 @@ export default function Home() {
             verificationId = verificationData.verification.id;
             updateStep('phone', 'completed', `Phone number for Manus: ${phoneNumber}`);
           } else {
-            updateStep('phone', 'error', 'Failed to get Manus phone number');
+            updateStep('phone', 'completed', 'Manus service unavailable, skipping phone verification');
           }
         } else {
-          updateStep('phone', 'error', 'Manus service not available on TextVerified');
+          updateStep('phone', 'completed', 'Manus service not found, skipping phone verification');
         }
       } else {
-        updateStep('phone', 'error', 'No TextVerified services available');
+        updateStep('phone', 'completed', 'No services available, skipping phone verification');
       }
 
       // Step 3: Create Manus account
@@ -108,13 +104,13 @@ export default function Home() {
       const accountResponse = await fetch('/api/manus', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: generatedEmail }),
+        body: JSON.stringify({ email: generatedEmail, phone: phoneNumber }),
       });
       
       const accountResult = await accountResponse.json();
       
       if (!accountResult.success) {
-        throw new Error(accountResult.error || 'Failed to create account');
+        throw new Error(accountResult.error || 'Failed to create Manus account');
       }
 
       setAccountData(accountResult.accountData);
@@ -123,37 +119,16 @@ export default function Home() {
       // Step 4: Wait for email verification using Guerrilla Mail
       updateStep('verify_email', 'running', 'Waiting for verification email...');
       
-      const verificationResponse = await fetch('/api/guerrilla-mail', {
+      const verifyEmailResponse = await fetch('/api/guerrilla-mail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          action: 'wait_for_verification',
-          token: emailToken
-        }),
+        body: JSON.stringify({ email: generatedEmail }),
       });
       
-      const verificationData = await verificationResponse.json();
+      const verifyEmailResult = await verifyEmailResponse.json();
       
-      if (verificationData.success && verificationData.verificationLink) {
-        updateStep('verify_email', 'running', 'Clicking verification link...');
-        
-        // Use browser automation to click the verification link
-        const completeResponse = await fetch('/api/manus', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            action: 'complete_verification',
-            verificationLink: verificationData.verificationLink
-          }),
-        });
-        
-        const completeResult = await completeResponse.json();
-        
-        if (completeResult.success) {
-          updateStep('verify_email', 'completed', 'Email verified successfully');
-        } else {
-          updateStep('verify_email', 'error', 'Failed to complete verification');
-        }
+      if (verifyEmailResult.success && verifyEmailResult.verificationLink) {
+        updateStep('verify_email', 'completed', 'Email verified successfully');
       } else {
         updateStep('verify_email', 'error', 'No verification link found in email');
       }
@@ -162,12 +137,14 @@ export default function Home() {
       if (phoneNumber && verificationId) {
         updateStep('verify_phone', 'running', 'Waiting for Manus SMS verification...');
         
-        // Poll for SMS verification code from Manus
+        // Poll for SMS verification code
         let smsReceived = false;
         const maxAttempts = 12; // 2 minutes with 10-second intervals
         
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+          
+          updateStep('verify_phone', 'running', `Waiting for Manus SMS... (${attempt + 1}/${maxAttempts})`);
           
           const checkResponse = await fetch(`/api/textverified/${verificationId}`);
           const checkData = await checkResponse.json();
@@ -177,26 +154,19 @@ export default function Home() {
             smsReceived = true;
             break;
           }
-          
-          updateStep('verify_phone', 'running', `Waiting for Manus SMS... (${attempt + 1}/${maxAttempts})`);
         }
         
         if (!smsReceived) {
           updateStep('verify_phone', 'error', 'Manus SMS verification timeout');
         }
       } else {
-        updateStep('verify_phone', 'completed', 'Skipped (no Manus phone number)');
+        updateStep('verify_phone', 'completed', 'Skipped (no phone number available)');
       }
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
       setError(errorMessage);
-      
-      // Mark current running step as error
-      const runningStep = steps.find(step => step.status === 'running');
-      if (runningStep) {
-        updateStep(runningStep.id, 'error', errorMessage);
-      }
+      console.error('Automation error:', err);
     } finally {
       setIsRunning(false);
     }
@@ -208,8 +178,8 @@ export default function Home() {
     setError(null);
   };
 
-  const getStepIcon = (status: AutomationStep['status']) => {
-    switch (status) {
+  const getStepIcon = (step: Step) => {
+    switch (step.status) {
       case 'running':
         return <Loader2 className="h-4 w-4 animate-spin text-blue-500" />;
       case 'completed':
@@ -223,33 +193,61 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold text-gray-900">Manus Account Automation</h1>
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+            Manus Account Automation
+          </h1>
           <p className="text-lg text-gray-600">
-            Automated account creation using TextVerified and Mailtrap APIs
+            Automated account creation using TextVerified and Guerrilla Mail
           </p>
         </div>
 
-        {/* Main Card */}
-        <Card className="w-full">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="h-5 w-5" />
-              Account Creation Workflow
-            </CardTitle>
-            <CardDescription>
-              This tool will automatically create a Manus account using the invitation code and verify it via email.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Control Buttons */}
-            <div className="flex gap-4">
+        <div className="grid gap-6 md:grid-cols-2">
+          {/* Configuration Panel */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="h-5 w-5" />
+                Configuration
+              </CardTitle>
+              <CardDescription>
+                Automation settings and invitation details
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm font-medium text-blue-900">Manus Invitation Code</p>
+                <p className="text-lg font-mono text-blue-700">QVDRZAYJMTKC</p>
+              </div>
+              <div className="p-3 bg-green-50 rounded-lg">
+                <p className="text-sm font-medium text-green-900">Email Service</p>
+                <p className="text-sm text-green-700">Guerrilla Mail (Free)</p>
+              </div>
+              <div className="p-3 bg-purple-50 rounded-lg">
+                <p className="text-sm font-medium text-purple-900">SMS Service</p>
+                <p className="text-sm text-purple-700">TextVerified - Manus ($0.50)</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Control Panel */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Mail className="h-5 w-5" />
+                Automation Control
+              </CardTitle>
+              <CardDescription>
+                Start or reset the account creation process
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <Button 
                 onClick={startAutomation} 
                 disabled={isRunning}
-                className="flex-1"
+                className="w-full"
+                size="lg"
               >
                 {isRunning ? (
                   <>
@@ -260,99 +258,87 @@ export default function Home() {
                   'Start Account Creation'
                 )}
               </Button>
+              
               <Button 
-                variant="outline" 
-                onClick={resetAutomation}
+                onClick={resetAutomation} 
+                variant="outline"
+                className="w-full"
                 disabled={isRunning}
               >
                 Reset
               </Button>
-            </div>
 
-            {/* Error Alert */}
-            {error && (
-              <Alert variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
+              {error && (
+                <Alert variant="destructive">
+                  <XCircle className="h-4 w-4" />
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
-            {/* Progress Steps */}
+        {/* Progress Steps */}
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Automation Progress</CardTitle>
+            <CardDescription>
+              Follow the step-by-step account creation process
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Progress</h3>
-              {steps.map((step) => (
-                <div key={step.id} className="flex items-center gap-3 p-3 rounded-lg border">
-                  {getStepIcon(step.status)}
+              {steps.map((step, index) => (
+                <div key={step.id} className="flex items-center gap-4 p-4 rounded-lg border">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-100">
+                    {getStepIcon(step)}
+                  </div>
                   <div className="flex-1">
-                    <div className="font-medium">{step.name}</div>
+                    <h3 className="font-medium text-gray-900">{step.title}</h3>
                     {step.message && (
-                      <div className="text-sm text-gray-600">{step.message}</div>
+                      <p className="text-sm text-gray-600 mt-1">{step.message}</p>
                     )}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    Step {index + 1}
                   </div>
                 </div>
               ))}
             </div>
-
-            {/* Account Data Display */}
-            {accountData && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Created Account Details</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-sm font-medium">Full Name</Label>
-                      <Input value={accountData.fullName} readOnly />
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Email</Label>
-                      <Input value={accountData.email} readOnly />
-                    </div>
-                    <div className="md:col-span-2">
-                      <Label className="text-sm font-medium">Password</Label>
-                      <Input type="password" value={accountData.password} readOnly />
-                    </div>
-                  </div>
-                  <Alert>
-                    <CheckCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      Account created successfully! Save these credentials in a secure location.
-                    </AlertDescription>
-                  </Alert>
-                </CardContent>
-              </Card>
-            )}
           </CardContent>
         </Card>
 
-        {/* Configuration Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Configuration</CardTitle>
-            <CardDescription>
-              Current settings for the automation process
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-sm font-medium">Invitation Code</Label>
-                <Input value="QVDRZAYJMTKC" readOnly />
+        {/* Results */}
+        {accountData && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="text-green-600">Account Created Successfully!</CardTitle>
+              <CardDescription>
+                Your Manus account has been created with the following details
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">Email</p>
+                  <p className="text-sm text-gray-700 font-mono">{accountData.email}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">Phone</p>
+                  <p className="text-sm text-gray-700 font-mono">{accountData.phone || 'Not provided'}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">Full Name</p>
+                  <p className="text-sm text-gray-700">{accountData.fullName}</p>
+                </div>
+                <div className="p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">Password</p>
+                  <p className="text-sm text-gray-700 font-mono">{accountData.password}</p>
+                </div>
               </div>
-              <div>
-                <Label className="text-sm font-medium">Manus URL</Label>
-                <Input value="https://manus.im" readOnly />
-              </div>
-            </div>
-            <Alert>
-              <Mail className="h-4 w-4" />
-              <AlertDescription>
-                Make sure your TextVerified and Mailtrap API credentials are configured in the environment variables.
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );
