@@ -145,7 +145,8 @@ export class RetryAutomationService {
         status: 'Generating free email address with Guerrilla Mail...'
       });
 
-      const emailResult = await this.makeApiCall('/api/guerrilla-mail', 'POST', {});
+      const emailClient = new MailTmClient();
+      const emailResult = await emailClient.getEmailAddress();
       if (!emailResult.success) {
         return {
           success: false,
@@ -256,7 +257,7 @@ export class RetryAutomationService {
       // Wait a bit for email to arrive
       await new Promise(resolve => setTimeout(resolve, 5000));
 
-      const emailVerifyResult = await this.makeApiCall(`/api/guerrilla-mail/${email.split('@')[0]}`, 'GET', {});
+      const emailVerifyResult = await emailClient.waitForVerificationEmail(email);
       if (!emailVerifyResult.success) {
         return {
           success: false,
@@ -379,4 +380,7 @@ export class RetryAutomationService {
 }
 
 export default RetryAutomationService;
+
+
+import { MailTmClient } from './mail-tm';
 

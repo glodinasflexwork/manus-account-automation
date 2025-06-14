@@ -8,7 +8,7 @@ export class GuerrillaMailClient {
   // Get a temporary email address
   async getEmailAddress(): Promise<{ email: string; sidToken: string }> {
     try {
-      const response = await axios.get(`${this.baseUrl}?f=get_email_address`);
+      const response = await axios.get(`${this.baseUrl}?f=get_email_address`, { timeout: 60000 });
       const data = response.data as Record<string, unknown>;
       
       this.sidToken = String(data.sid_token || '');
